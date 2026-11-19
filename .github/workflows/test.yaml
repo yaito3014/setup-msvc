@@ -1,0 +1,72 @@
+name: test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # windows-latest and windows-2025 currently run on the
+        # windows-2025-vs2026 image, so listing them adds no coverage.
+        #
+        # "14." selects the newest toolset, which vcvarsall also picks by
+        # default. The non-default entries pass only if the action's choice
+        # actually overrides that default.
+        include:
+          - { os: windows-2025-vs2026, prefix: "14.", non-default: false }
+          - { os: windows-2025-vs2026, prefix: "14.44.", non-default: true }
+          - { os: windows-2025-vs2026, prefix: "14.29.", non-default: true }
+          - { os: windows-2022, prefix: "14.", non-default: false }
+          - { os: windows-2022, prefix: "14.29.", non-default: true }
+    name: test (${{ matrix.os }}, ${{ matrix.prefix }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: msvc
+        uses: ./
+        with:
+          toolset-prefix: ${{ matrix.prefix }}
+
+      - name: Environment matches the selected toolset
+        shell: pwsh
+        env:
+          PREFIX: ${{ matrix.prefix }}
+          NON_DEFAULT: ${{ matrix.non-default }}
+          EXPECTED: ${{ steps.msvc.outputs.toolset }}
+          VS_PATH: ${{ steps.msvc.outputs.vs-path }}
+        run: |
+          $actual = $env:VCToolsVersion.TrimEnd('\')
+          $default = (Get-Content (Join-Path $env:VS_PATH 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()
+          Write-Host "prefix=$env:PREFIX expected=$env:EXPECTED actual=$actual default=$default vs-path=$env:VS_PATH"
+
+          if (-not $env:EXPECTED.StartsWith($env:PREFIX)) { throw "Selected toolset does not match the prefix" }
+          if ($actual -ne $env:EXPECTED) { throw "VCToolsVersion mismatch" }
+          # Guards against the image changing its default so that this entry
+          # no longer tests anything beyond the default environment.
+          if ($env:NON_DEFAULT -eq 'true' -and $actual -eq $default) {
+            throw "Selected toolset is the default; this entry no longer tests overriding it"
+          }
+
+          $cl = (Get-Command cl).Source
+          Write-Host "cl=$cl"
+          if (-not $cl.StartsWith($env:VCToolsInstallDir, [StringComparison]::OrdinalIgnoreCase)) { throw "cl.exe is not from the selected toolset" }
+          & cl 2>&1 | Select-String 'Version' | Select-Object -First 1
+
+      - id: missing
+        uses: ./
+        continue-on-error: true
+        with:
+          toolset-prefix: "99."
+
+      - name: Unmatched prefix fails
+        if: steps.missing.outcome != 'failure'
+        shell: pwsh
+        run: throw "Expected failure for an unmatched prefix"

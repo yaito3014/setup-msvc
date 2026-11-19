@@ -20,11 +20,16 @@ jobs:
         # default. The non-default entries pass only if the action's choice
         # actually overrides that default.
         include:
-          - { os: windows-2025-vs2026, prefix: "14.", non-default: false }
-          - { os: windows-2025-vs2026, prefix: "14.44.", non-default: true }
-          - { os: windows-2025-vs2026, prefix: "14.29.", non-default: true }
-          - { os: windows-2022, prefix: "14.", non-default: false }
-          - { os: windows-2022, prefix: "14.29.", non-default: true }
+          - { os: windows-2025-vs2026, prefix: "14.", expect: '^14\.', non-default: false }
+          - { os: windows-2025-vs2026, prefix: "14.44.", expect: '^14\.44\.', non-default: true }
+          - { os: windows-2025-vs2026, prefix: "14.29.", expect: '^14\.29\.', non-default: true }
+          - { os: windows-2025-vs2026, prefix: "2026", expect: '^14\.[5-9]\d\.', non-default: false }
+          - { os: windows-2025-vs2026, prefix: "2022", expect: '^14\.[34]\d\.', non-default: true }
+          - { os: windows-2025-vs2026, prefix: "2019", expect: '^14\.2\d\.', non-default: true }
+          - { os: windows-2022, prefix: "14.", expect: '^14\.', non-default: false }
+          - { os: windows-2022, prefix: "14.29.", expect: '^14\.29\.', non-default: true }
+          - { os: windows-2022, prefix: "2022", expect: '^14\.[34]\d\.', non-default: false }
+          - { os: windows-2022, prefix: "2019", expect: '^14\.2\d\.', non-default: true }
     name: test (${{ matrix.os }}, ${{ matrix.prefix }})
     runs-on: ${{ matrix.os }}
     steps:
@@ -39,6 +44,7 @@ jobs:
         shell: pwsh
         env:
           PREFIX: ${{ matrix.prefix }}
+          EXPECT: ${{ matrix.expect }}
           NON_DEFAULT: ${{ matrix.non-default }}
           EXPECTED: ${{ steps.msvc.outputs.toolset }}
           VS_PATH: ${{ steps.msvc.outputs.vs-path }}
@@ -47,7 +53,7 @@ jobs:
           $default = (Get-Content (Join-Path $env:VS_PATH 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()
           Write-Host "prefix=$env:PREFIX expected=$env:EXPECTED actual=$actual default=$default vs-path=$env:VS_PATH"
 
-          if (-not $env:EXPECTED.StartsWith($env:PREFIX)) { throw "Selected toolset does not match the prefix" }
+          if ($env:EXPECTED -notmatch $env:EXPECT) { throw "Selected toolset does not match '$env:EXPECT'" }
           if ($actual -ne $env:EXPECTED) { throw "VCToolsVersion mismatch" }
           # Guards against the image changing its default so that this entry
           # no longer tests anything beyond the default environment.
@@ -70,3 +76,14 @@ jobs:
         if: steps.missing.outcome != 'failure'
         shell: pwsh
         run: throw "Expected failure for an unmatched prefix"
+
+      - id: unsupported-year
+        uses: $/
+        continue-on-error: true
+        with:
+          toolset-prefix: "2017"
+
+      - name: Unsupported year fails
+        if: steps.unsupported-year.outcome != 'failure'
+        shell: pwsh
+        run: throw "Expected failure for an unsupported year"

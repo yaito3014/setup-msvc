@@ -1,14 +1,19 @@
 name: setup-msvc
 description: >
   Set up an MSVC developer environment using the newest installed toolset whose
-  version starts with a given prefix, searching every Visual Studio installation
-  on the runner (not only the latest one).
+  version starts with a given prefix, or that belongs to a given Visual Studio
+  release, searching every Visual Studio installation on the runner (not only
+  the latest one).
 
 inputs:
   toolset-prefix:
     description: >
       Version prefix of the MSVC toolset, e.g. '14.4' (matches 14.40-14.49) or
-      '14.44.' (matches 14.44.x only). The newest matching toolset wins.
+      '14.44.' (matches 14.44.x only), or a Visual Studio year selecting the
+      toolset family that release ships: '2019' (14.2x), '2022' (14.3x-14.4x)
+      or '2026' (14.5x and later). The family is matched in any installation,
+      so '2022' can pick 14.44 from a Visual Studio 2026 install. The newest
+      matching toolset wins.
     required: true
   arch:
     description: Target architecture passed to vcvarsall (x64, x86, amd64_arm64, ...).
@@ -33,8 +38,24 @@ runs:
       run: |
         $ErrorActionPreference = 'Stop'
 
-        if ($env:PREFIX -notmatch '^\d+(\.\d+)*\.?$') {
-          throw "Invalid toolset-prefix '$env:PREFIX' (expected something like '14.4' or '14.44.')"
+        # Toolset family shipped by each Visual Studio release, as [min, max).
+        # The newest family stays open-ended until a later release bounds it.
+        $years = @{
+          '2019' = [version]'14.20', [version]'14.30'
+          '2022' = [version]'14.30', [version]'14.50'
+          '2026' = [version]'14.50', $null
+        }
+
+        if ($env:PREFIX -match '^\d{4}$') {
+          if (-not $years.ContainsKey($env:PREFIX)) {
+            throw "Unsupported Visual Studio year '$env:PREFIX' (supported: $(($years.Keys | Sort-Object) -join ', '))"
+          }
+          $min, $max = $years[$env:PREFIX]
+          $isMatch = { $_.Version -ge $min -and (-not $max -or $_.Version -lt $max) }
+        } elseif ($env:PREFIX -match '^\d+(\.\d+)*\.?$') {
+          $isMatch = { $_.Name.StartsWith($env:PREFIX) }
+        } else {
+          throw "Invalid toolset-prefix '$env:PREFIX' (expected something like '14.4', '14.44.' or '2022')"
         }
 
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
@@ -58,12 +79,12 @@ runs:
 
         # Compare as [version], never as strings: '14.9' < '14.10'.
         $best = $candidates |
-          Where-Object { $_.Name.StartsWith($env:PREFIX) } |
+          Where-Object $isMatch |
           Sort-Object Version -Descending |
           Select-Object -First 1
 
         # Fail loudly instead of silently falling back to the default toolset.
-        if (-not $best) { throw "No MSVC toolset matching prefix '$env:PREFIX'" }
+        if (-not $best) { throw "No MSVC toolset matching '$env:PREFIX'" }
 
         Write-Host "Selected $($best.Name) from $($best.VsPath)"
         Add-Content -Path $env:GITHUB_OUTPUT -Value "toolset=$($best.Name)"

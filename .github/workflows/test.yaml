@@ -1,0 +1,41 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2025-vs2026, windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: msvc
+        uses: ./
+        with:
+          toolset-prefix: "14."
+
+      - name: Environment matches the selected toolset
+        shell: pwsh
+        env:
+          EXPECTED: ${{ steps.msvc.outputs.toolset }}
+        run: |
+          $actual = $env:VCToolsVersion.TrimEnd('\')
+          Write-Host "expected=$env:EXPECTED actual=$actual vs-path=${{ steps.msvc.outputs.vs-path }}"
+          if ($actual -ne $env:EXPECTED) { throw "VCToolsVersion mismatch" }
+          cl 2>&1 | Select-Object -First 1
+
+      - id: missing
+        uses: ./
+        continue-on-error: true
+        with:
+          toolset-prefix: "99."
+
+      - name: Unmatched prefix fails
+        if: steps.missing.outcome != 'failure'
+        shell: pwsh
+        run: throw "Expected failure for an unmatched prefix"

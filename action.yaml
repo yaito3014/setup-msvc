@@ -1,0 +1,78 @@
+name: setup-msvc
+description: >
+  Set up an MSVC developer environment using the newest installed toolset whose
+  version starts with a given prefix, searching every Visual Studio installation
+  on the runner (not only the latest one).
+
+inputs:
+  toolset-prefix:
+    description: >
+      Version prefix of the MSVC toolset, e.g. '14.4' (matches 14.40-14.49) or
+      '14.44.' (matches 14.44.x only). The newest matching toolset wins.
+    required: true
+  arch:
+    description: Target architecture passed to vcvarsall (x64, x86, amd64_arm64, ...).
+    default: x64
+
+outputs:
+  toolset:
+    description: Full version of the selected toolset, e.g. 14.44.35207.
+    value: ${{ steps.resolve.outputs.toolset }}
+  vs-path:
+    description: Installation path of the Visual Studio instance that provides the toolset.
+    value: ${{ steps.resolve.outputs.vs-path }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        PREFIX: ${{ inputs.toolset-prefix }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        if ($env:PREFIX -notmatch '^\d+(\.\d+)*\.?$') {
+          throw "Invalid toolset-prefix '$env:PREFIX' (expected something like '14.4' or '14.44.')"
+        }
+
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+        if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
+
+        $installs = @(& $vswhere -all -products * -property installationPath)
+
+        $candidates = foreach ($vs in $installs) {
+          $msvc = Join-Path $vs 'VC\Tools\MSVC'
+          if (-not (Test-Path $msvc)) { continue }
+          foreach ($dir in Get-ChildItem $msvc -Directory) {
+            $v = $null
+            if (-not [version]::TryParse($dir.Name, [ref]$v)) { continue }
+            [pscustomobject]@{ Version = $v; Name = $dir.Name; VsPath = $vs }
+          }
+        }
+
+        Write-Host 'Installed MSVC toolsets:'
+        $candidates | Sort-Object Version -Descending |
+          ForEach-Object { Write-Host "  $($_.Name)  ($($_.VsPath))" }
+
+        # Compare as [version], never as strings: '14.9' < '14.10'.
+        $best = $candidates |
+          Where-Object { $_.Name.StartsWith($env:PREFIX) } |
+          Sort-Object Version -Descending |
+          Select-Object -First 1
+
+        # Fail loudly instead of silently falling back to the default toolset.
+        if (-not $best) { throw "No MSVC toolset matching prefix '$env:PREFIX'" }
+
+        Write-Host "Selected $($best.Name) from $($best.VsPath)"
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "toolset=$($best.Name)"
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "vs-path=$($best.VsPath)"
+
+    # Consider pinning this to a commit SHA.
+    - if: runner.os == 'Windows'
+      uses: TheMrMilchmann/setup-msvc-dev@v4
+      with:
+        arch: ${{ inputs.arch }}
+        vs-path: ${{ steps.resolve.outputs.vs-path }}
+        toolset: ${{ steps.resolve.outputs.toolset }}

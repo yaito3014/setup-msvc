@@ -40,7 +40,7 @@ runs:
         $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
         if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
 
-        $installs = @(& $vswhere -all -products * -property installationPath)
+        $installs = @(& $vswhere -all -prerelease -products * -property installationPath)
 
         $candidates = foreach ($vs in $installs) {
           $msvc = Join-Path $vs 'VC\Tools\MSVC'
